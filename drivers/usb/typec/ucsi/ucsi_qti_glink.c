@@ -122,6 +122,29 @@ int unregister_ucsi_glink_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL(unregister_ucsi_glink_notifier);
 
+static DEFINE_SPINLOCK(ucsi_glink_constat_lock);
+static struct ucsi_glink_constat_info ucsi_glink_last_constat;
+static bool ucsi_glink_constat_valid;
+
+/* Last connector status seen, for clients that register late. */
+int ucsi_glink_get_constat(struct ucsi_glink_constat_info *info)
+{
+	int rc = -ENODATA;
+
+	if (!info)
+		return -EINVAL;
+
+	spin_lock(&ucsi_glink_constat_lock);
+	if (ucsi_glink_constat_valid) {
+		*info = ucsi_glink_last_constat;
+		rc = 0;
+	}
+	spin_unlock(&ucsi_glink_constat_lock);
+
+	return rc;
+}
+EXPORT_SYMBOL(ucsi_glink_get_constat);
+
 static char *offset_to_name(unsigned int offset)
 {
 	char *type;
@@ -476,6 +499,25 @@ static void ucsi_qti_notify(struct ucsi_dev *udev, unsigned int offset,
 			entry->constat_info.acc = TYPEC_ACCESSORY_NONE;
 			break;
 		}
+
+		entry->constat_info.connect =
+			!!(status->flags & UCSI_CONSTAT_CONNECTED);
+		entry->constat_info.host =
+			conn_partner_type == UCSI_CONSTAT_PARTNER_TYPE_UFP ||
+			conn_partner_type == UCSI_CONSTAT_PARTNER_TYPE_CABLE_AND_UFP;
+		entry->constat_info.sink =
+			!(status->flags & UCSI_CONSTAT_PWR_DIR);
+		entry->constat_info.pd =
+			UCSI_CONSTAT_PWR_OPMODE(status->flags) ==
+			UCSI_CONSTAT_PWR_OPMODE_PD;
+		entry->constat_info.partner_alt_mode =
+			!!(UCSI_CONSTAT_PARTNER_FLAGS(status->flags) &
+			   UCSI_CONSTAT_PARTNER_FLAG_ALT_MODE);
+
+		spin_lock(&ucsi_glink_constat_lock);
+		ucsi_glink_last_constat = entry->constat_info;
+		ucsi_glink_constat_valid = true;
+		spin_unlock(&ucsi_glink_constat_lock);
 
 		mutex_lock(&udev->notify_lock);
 		list_add_tail(&entry->node, &udev->constat_info_list);

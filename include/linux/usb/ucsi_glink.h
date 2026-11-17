@@ -12,6 +12,11 @@
 
 struct ucsi_glink_constat_info {
 	enum typec_accessory acc;
+	bool connect;		/* a partner is attached */
+	bool host;		/* partner is a UFP: we are the USB host */
+	bool sink;		/* we draw power from the partner */
+	bool pd;		/* a USB PD contract is in place */
+	bool partner_alt_mode;	/* an alternate mode is active */
 };
 
 struct notifier_block;
@@ -20,6 +25,7 @@ struct notifier_block;
 
 int register_ucsi_glink_notifier(struct notifier_block *nb);
 int unregister_ucsi_glink_notifier(struct notifier_block *nb);
+int ucsi_glink_get_constat(struct ucsi_glink_constat_info *info);
 
 #else
 
@@ -29,6 +35,11 @@ static inline int register_ucsi_glink_notifier(struct notifier_block *nb)
 }
 
 static inline int unregister_ucsi_glink_notifier(struct notifier_block *nb)
+{
+	return -ENODEV;
+}
+
+static inline int ucsi_glink_get_constat(struct ucsi_glink_constat_info *info)
 {
 	return -ENODEV;
 }
