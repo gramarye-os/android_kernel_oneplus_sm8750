@@ -80,8 +80,6 @@ struct altmode_dev {
 	atomic_t			pan_en_sent;
 	struct delayed_work		send_pan_en_work;
 	struct delayed_work		send_pan_ack_work;
-	struct delayed_work		test_resend_work;
-	int				test_resend_count;
 	struct dentry			*debugfs_dir;
 	struct completion		response_received;
 	u8				ack_port_index;
@@ -412,17 +410,9 @@ struct altmode_client *altmode_register_client(struct device *client_dev,
 	list_add(&amclient->c_node, &amdev->client_list);
 	mutex_unlock(&amdev->client_lock);
 
-	pr_info("AOHP-TEST client %s svid %#x port %u registered, pan_en_sent=%d\n",
-			amclient->data.name, amclient->data.svid,
-			amclient->port_index, atomic_read(&amdev->pan_en_sent));
-
 	if (!atomic_read(&amdev->pan_en_sent))
 		schedule_delayed_work(&amdev->send_pan_en_work,
 				msecs_to_jiffies(20));
-
-	/* AOHP-TEST: ask again 10 s and 30 s after a client registers */
-	amdev->test_resend_count = 0;
-	schedule_delayed_work(&amdev->test_resend_work, msecs_to_jiffies(10000));
 
 	return amclient;
 }
@@ -484,23 +474,6 @@ static void altmode_send_pan_en(struct work_struct *work)
 
 	atomic_set(&amdev->pan_en_sent, 1);
 	altmode_dbg("Sent PAN EN\n");
-	pr_info("AOHP-TEST sent PAN EN\n");
-}
-
-/* AOHP-TEST: ask the PD firmware again for the current alt mode state, twice. */
-static void altmode_test_resend(struct work_struct *work)
-{
-	int rc;
-	u32 enable_msg = ALTMODE_PAN_EN;
-	struct altmode_dev *amdev = container_of(work, struct altmode_dev,
-			test_resend_work.work);
-
-	rc = __altmode_send_data(amdev, &enable_msg, sizeof(enable_msg));
-	pr_info("AOHP-TEST re-sent PAN EN #%d rc=%d\n",
-			amdev->test_resend_count + 1, rc);
-	if (++amdev->test_resend_count < 2)
-		schedule_delayed_work(&amdev->test_resend_work,
-				msecs_to_jiffies(20000));
 }
 
 static int altmode_send_ack(struct altmode_dev *amdev, u8 port_index)
@@ -527,7 +500,6 @@ static void altmode_state_cb(void *priv, enum pmic_glink_state state)
 	struct altmode_dev *amdev = priv;
 
 	altmode_dbg("state: %d\n", state);
-	pr_info("AOHP-TEST pmic_glink state %d\n", state);
 
 	switch (state) {
 	case PMIC_GLINK_STATE_DOWN:
@@ -598,10 +570,6 @@ static int altmode_callback(void *priv, void *data, size_t len)
 
 		altmode_dbg("Payload: %*ph\n", NOTIFY_PAYLOAD_SIZE,
 				notify_msg->payload);
-		pr_info("AOHP-TEST notify svid %#x port %u client %s payload %*ph\n",
-				svid, port_index,
-				amclient ? amclient->data.name : "NONE",
-				NOTIFY_PAYLOAD_SIZE, notify_msg->payload);
 
 		if (!amclient) {
 			altmode_dbg("No client associated with SVID %#x port %u\n",
@@ -743,7 +711,6 @@ static int altmode_probe(struct platform_device *pdev)
 	init_completion(&amdev->response_received);
 	INIT_DELAYED_WORK(&amdev->send_pan_en_work, altmode_send_pan_en);
 	INIT_DELAYED_WORK(&amdev->send_pan_ack_work, altmode_send_pan_ack);
-	INIT_DELAYED_WORK(&amdev->test_resend_work, altmode_test_resend);
 	INIT_LIST_HEAD(&amdev->d_node);
 	INIT_LIST_HEAD(&amdev->client_list);
 
@@ -797,7 +764,6 @@ static int altmode_remove(struct platform_device *pdev)
 
 	cancel_delayed_work_sync(&amdev->send_pan_en_work);
 	cancel_delayed_work_sync(&amdev->send_pan_ack_work);
-	cancel_delayed_work_sync(&amdev->test_resend_work);
 	idr_destroy(&amdev->client_idr);
 	atomic_set(&amdev->pan_en_sent, 0);
 
